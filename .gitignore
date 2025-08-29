@@ -53,6 +53,7 @@ Thumbs.db
 lucien_memory.json
 *.wav
 *.log
+.lucien/
 
 # Testing
 .coverage

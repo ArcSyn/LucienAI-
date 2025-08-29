@@ -47,7 +47,7 @@ HEADERS_GROQ = {
 
 # Validate required configuration
 if not GROQ_API_KEY:
-    print("⚠️ Warning: GROQ_API_KEY not found in environment variables.")
+    print("[ERROR] Warning: GROQ_API_KEY not found in environment variables.")
     print("Please create a .env file with your API key or set it as an environment variable.")
     print("See .env.example for template.")
 
@@ -130,6 +130,283 @@ def chat_ollama(messages, model="llama3", temperature=0.2) -> str:
         raise RuntimeError(f"Ollama request failed: {e}") from e
 
 # ============
+# GIT INTEGRATION
+# ============
+
+@command("git status")
+def cmd_git_status(args: str) -> None:
+    """Show current git repository status"""
+    try:
+        import subprocess
+        result = subprocess.run(["git", "status", "--porcelain"], 
+                              capture_output=True, text=True, check=True)
+        if result.stdout.strip():
+            print("Modified files:")
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    status, filename = line[:2], line[3:]
+                    print(f"  {status} {filename}")
+        else:
+            print("✅ Working directory clean")
+    except subprocess.CalledProcessError:
+        print("❌ Error: Not a git repository or git command failed")
+    except FileNotFoundError:
+        print("❌ Error: Git not installed")
+
+@command("git add")
+def cmd_git_add(args: str) -> None:
+    """Stage files for commit: git add <files>"""
+    if not args.strip():
+        print("Usage: git add <files>")
+        return
+    try:
+        import subprocess
+        files = args.strip().split()
+        result = subprocess.run(["git", "add"] + files, 
+                              capture_output=True, text=True, check=True)
+        print(f"✅ Staged {len(files)} file(s)")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error staging files: {e.stderr.strip()}")
+    except FileNotFoundError:
+        print("❌ Error: Git not installed")
+
+@command("git commit")
+def cmd_git_commit(args: str) -> None:
+    """Commit staged changes with AI-generated message"""
+    try:
+        import subprocess
+        
+        # Check if there are staged changes
+        result = subprocess.run(["git", "diff", "--cached", "--name-only"], 
+                              capture_output=True, text=True, check=True)
+        if not result.stdout.strip():
+            print("❌ No staged changes to commit")
+            return
+        
+        # Get staged changes for AI analysis
+        diff_result = subprocess.run(["git", "diff", "--cached"], 
+                                   capture_output=True, text=True, check=True)
+        
+        # Generate commit message using AI
+        messages = [
+            {"role": "system", "content": "Generate a concise, conventional commit message based on the git diff. Use format: type(scope): description. Keep it under 50 characters."},
+            {"role": "user", "content": f"Generate commit message for these changes:\n{diff_result.stdout[:1000]}"}
+        ]
+        
+        try:
+            if USE_INTERNET:
+                commit_msg = chat_groq(messages, model="llama3-70b-8192", temperature=0.3)
+            else:
+                commit_msg = chat_ollama(messages, model="llama3", temperature=0.3)
+            
+            # Clean up the message
+            commit_msg = commit_msg.strip().strip('"').strip("'")
+            if len(commit_msg) > 50:
+                commit_msg = commit_msg[:47] + "..."
+            
+            # Commit with the generated message
+            result = subprocess.run(["git", "commit", "-m", commit_msg], 
+                                  capture_output=True, text=True, check=True)
+            print(f"✅ Committed: {commit_msg}")
+            
+        except Exception as e:
+            print(f"❌ Error generating commit message: {e}")
+            print("Please commit manually with: git commit -m 'your message'")
+            
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error during commit: {e.stderr.strip()}")
+    except FileNotFoundError:
+        print("❌ Error: Git not installed")
+
+@command("git push")
+def cmd_git_push(args: str) -> None:
+    """Push commits to remote repository"""
+    try:
+        import subprocess
+        result = subprocess.run(["git", "push"], 
+                              capture_output=True, text=True, check=True)
+        print("✅ Successfully pushed to remote")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error pushing: {e.stderr.strip()}")
+    except FileNotFoundError:
+        print("❌ Error: Git not installed")
+
+@command("git pull")
+def cmd_git_pull(args: str) -> None:
+    """Pull latest changes from remote repository"""
+    try:
+        import subprocess
+        result = subprocess.run(["git", "pull"], 
+                              capture_output=True, text=True, check=True)
+        print("✅ Successfully pulled latest changes")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error pulling: {e.stderr.strip()}")
+    except FileNotFoundError:
+        print("❌ Error: Git not installed")
+
+@command("git log")
+def cmd_git_log(args: str) -> None:
+    """Show recent commit history"""
+    try:
+        import subprocess
+        result = subprocess.run(["git", "log", "--oneline", "-10"], 
+                              capture_output=True, text=True, check=True)
+        if result.stdout.strip():
+            print("Recent commits:")
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    print(f"  {line}")
+        else:
+            print("No commits found")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error getting log: {e.stderr.strip()}")
+    except FileNotFoundError:
+        print("❌ Error: Git not installed")
+
+# ============
+# WORKFLOW AUTOMATION (SPELLS)
+# ============
+
+import json
+from pathlib import Path
+from datetime import datetime
+
+SPELLS_FILE = Path(".lucien/spells.json")
+SPELLS_FILE.parent.mkdir(exist_ok=True)
+
+def load_spells():
+    """Load spells from JSON file"""
+    if not SPELLS_FILE.exists():
+        return {}
+    try:
+        with open(SPELLS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_spells(spells):
+    """Save spells to JSON file"""
+    try:
+        with open(SPELLS_FILE, "w", encoding="utf-8") as f:
+            json.dump(spells, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+# Global recording state
+recording_spell = None
+recorded_commands = []
+
+@command("record spell")
+def cmd_record_spell(args: str) -> None:
+    """Start recording a spell: record spell <name>"""
+    global recording_spell, recorded_commands
+    
+    if not args.strip():
+        print("Usage: record spell <name>")
+        return
+    
+    spell_name = args.strip()
+    spells = load_spells()
+    
+    if spell_name in spells:
+        print(f"⚠️ Spell '{spell_name}' already exists. Use 'delete spell {spell_name}' first.")
+        return
+    
+    recording_spell = spell_name
+    recorded_commands = []
+    print(f"🎬 Recording spell '{spell_name}'. Type 'stop recording' when done.")
+
+@command("stop recording")
+def cmd_stop_recording(args: str) -> None:
+    """Stop recording current spell"""
+    global recording_spell, recorded_commands
+    
+    if not recording_spell:
+        print("❌ No spell being recorded")
+        return
+    
+    if not recorded_commands:
+        print("❌ No commands recorded")
+        recording_spell = None
+        recorded_commands = []
+        return
+    
+    spells = load_spells()
+    spells[recording_spell] = {
+        "commands": recorded_commands,
+        "description": f"Recorded spell with {len(recorded_commands)} commands",
+        "created": datetime.now().isoformat(),
+        "count": len(recorded_commands)
+    }
+    
+    if save_spells(spells):
+        print(f"✅ Spell '{recording_spell}' saved with {len(recorded_commands)} commands")
+    else:
+        print("❌ Error saving spell")
+    
+    recording_spell = None
+    recorded_commands = []
+
+@command("cast spell")
+def cmd_cast_spell(args: str) -> None:
+    """Cast a recorded spell: cast spell <name>"""
+    if not args.strip():
+        print("Usage: cast spell <name>")
+        return
+    
+    spell_name = args.strip()
+    spells = load_spells()
+    
+    if spell_name not in spells:
+        print(f"❌ Spell '{spell_name}' not found")
+        return
+    
+    spell = spells[spell_name]
+    print(f"🔮 Casting spell '{spell_name}' ({spell['count']} commands)...")
+    
+    for i, command in enumerate(spell['commands'], 1):
+        print(f"\n[{i}/{spell['count']}] Executing: {command}")
+        dispatch(command)
+        print("-" * 40)
+    
+    print(f"✅ Spell '{spell_name}' completed!")
+
+@command("list spells")
+def cmd_list_spells(args: str) -> None:
+    """List all available spells"""
+    spells = load_spells()
+    
+    if not spells:
+        print("No spells recorded yet.")
+        return
+    
+    print("Available spells:")
+    for name, spell in spells.items():
+        print(f"  📜 {name} - {spell['description']}")
+        print(f"      Commands: {spell['count']}, Created: {spell['created'][:10]}")
+
+@command("delete spell")
+def cmd_delete_spell(args: str) -> None:
+    """Delete a spell: delete spell <name>"""
+    if not args.strip():
+        print("Usage: delete spell <name>")
+        return
+    
+    spell_name = args.strip()
+    spells = load_spells()
+    
+    if spell_name not in spells:
+        print(f"❌ Spell '{spell_name}' not found")
+        return
+    
+    del spells[spell_name]
+    if save_spells(spells):
+        print(f"✅ Spell '{spell_name}' deleted")
+    else:
+        print("❌ Error deleting spell")
+
+# ============
 # COMMAND ROUTER
 # ============
 
@@ -151,7 +428,7 @@ def cmd_remember(args: str) -> None:
         return
     memory.setdefault("notes", []).append(text)
     save_memory(memory)
-    print("✅ Memory saved.")
+    print("[OK] Memory saved.")
 
 @command("show memory")
 def cmd_show_memory(args: str) -> None:
@@ -168,7 +445,7 @@ def cmd_clear_memory(args: str) -> None:
     """Clear all saved memories"""
     memory["notes"] = []
     save_memory(memory)
-    print("✅ Memory cleared.")
+    print("[OK] Memory cleared.")
 
 @command("list files")
 def cmd_list_files(args: str) -> None:
@@ -278,7 +555,7 @@ def cmd_ai(args: str) -> None:
             return
         print(out)
     except RuntimeError as e:
-        print(f"❌ {e}")
+        print(f"[ERROR] {e}")
 
 @command("help")
 def cmd_help(args: str) -> None:
@@ -293,6 +570,19 @@ def cmd_help(args: str) -> None:
     print("    read file <path>    - Read file contents")
     print("    write file <path>   - Write content to file")
     print("    delete file <path>  - Delete a file")
+    print("  Git:")
+    print("    git status          - Show repository status")
+    print("    git add <files>     - Stage files for commit")
+    print("    git commit          - Commit with AI-generated message")
+    print("    git push            - Push to remote repository")
+    print("    git pull            - Pull latest changes")
+    print("    git log             - Show recent commit history")
+    print("  Spells:")
+    print("    record spell <name> - Start recording a workflow")
+    print("    stop recording      - Stop recording current spell")
+    print("    cast spell <name>   - Execute a recorded workflow")
+    print("    list spells         - Show all available spells")
+    print("    delete spell <name> - Remove a spell")
     print("  System:")
     print("    disk space          - Show disk usage")
     print("    cpu usage           - Show CPU usage")
@@ -311,8 +601,14 @@ def cmd_help(args: str) -> None:
 
 def dispatch(line: str) -> None:
     """Dispatch command to appropriate handler."""
+    global recorded_commands
+    
     if not line:
         return
+    
+    # Record command if we're recording a spell
+    if recording_spell and line not in ["stop recording"]:
+        recorded_commands.append(line)
     
     # Handle special cases first
     if line.lower() in ["quit", "exit", "bye"]:
@@ -332,7 +628,7 @@ def dispatch(line: str) -> None:
     
     # Check for commands with spaces (like "show memory")
     for cmd_name, fn in COMMANDS.items():
-        if line.startswith(cmd_name + " "):
+        if line == cmd_name or line.startswith(cmd_name + " "):
             args = line[len(cmd_name):].strip()
             fn(args)
             return
@@ -350,9 +646,9 @@ def dispatch(line: str) -> None:
             resp = chat_ollama(messages, model="llama3", temperature=0.5)
         print(resp)
     except RuntimeError as e:
-        print(f"⚠️ {e}")
+        print(f"[ERROR] {e}")
     except Exception as e:
-        print(f"⚠️ Unexpected error: {e}")
+        print(f"[ERROR] Unexpected error: {e}")
 
 # ============
 # MAIN LOOP
@@ -383,11 +679,11 @@ def main():
             
             if line.lower() == "internet on":
                 USE_INTERNET = True
-                print("✅ Internet mode ON.")
+                print("[OK] Internet mode ON.")
                 continue
             if line.lower() == "internet off":
                 USE_INTERNET = False
-                print("✅ Internet mode OFF.")
+                print("[OK] Internet mode OFF.")
                 continue
             
             result = dispatch(line)
