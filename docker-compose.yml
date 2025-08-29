@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  lucien:
+    build: .
+    volumes:
+      - .:/app
+      - ./lucien_memory.json:/app/lucien_memory.json
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - USE_INTERNET=${USE_INTERNET:-true}
+      - GROQ_API_URL=${GROQ_API_URL:-https://api.groq.com/openai/v1/chat/completions}
+      - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434/api/chat}
+      - MEMORY_FILE=${MEMORY_FILE:-lucien_memory.json}
+    stdin_open: true
+    tty: true
+    command: python Lucien.py
+
+  # Optional: Ollama service for local AI
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    profiles:
+      - ollama
+
+volumes:
+  ollama_data:
