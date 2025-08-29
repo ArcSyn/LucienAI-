@@ -45,24 +45,46 @@ Lucien is only getting started. Planned magical upgrades include:
 
 ---
 
-## How to Run Locally
+## Config & Running
 
-1. Clone the repo
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-Create a .env file with:
+```ini
+# Required for Groq API access
+GROQ_API_KEY=your_groq_api_key_here
 
-ini
-Copy
-Edit
-GROQ_API_KEY=your_api_key_here
-Run Lucien:
+# Optional configuration
+USE_INTERNET=true
+GROQ_API_URL=https://api.groq.com/openai/v1/chat/completions  # default
+OLLAMA_URL=http://localhost:11434/api/chat                   # default
+MEMORY_FILE=lucien_memory.json                               # default
+```
 
-bash
-Copy
-Edit
-python app.py
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Dev deps
+pip install -r requirements-dev.txt
+
+# Run tests (skips unavailable services automatically)
+pytest -q
+
+# Start Lucien AI
+python Lucien.py
+```
+
+**Service notes:**
+- Groq requires `GROQ_API_KEY`
+- Ollama optional (local)
+- Tests skip gracefully if services are down
+
+**Example commands:**
+```bash
+> help
+> remember Important note
+> ai groq Explain Python decorators
+> ai ollama Summarize this text
+> internet off
+```
 Credits
 Original coding and concept: ArcSyn (Luis Colon)
 
